@@ -12,7 +12,6 @@ REDIS_URL = os.getenv("REDIS_URL")
 ALLOWED_ROLES = [1444746663150223561, 1337512939586060293, 1337512939573219384]
 
 # --- REDIS VERİTABANI BAĞLANTISI ---
-# decode_responses=True sayesinde veriler doğrudan metin/sayı olarak gelir
 r = redis.from_url(REDIS_URL, decode_responses=True) if REDIS_URL else None
 
 
@@ -23,6 +22,14 @@ def get_user_points(user_id: str) -> int:
 
 def add_user_points(user_id: str, amount: int) -> int:
     return r.hincrby("puanlar", user_id, amount)
+
+
+def reset_user_points(user_id: str):
+    r.hdel("puanlar", user_id)
+
+
+def reset_all_points():
+    r.delete("puanlar")
 
 
 def get_all_points() -> dict:
@@ -191,6 +198,57 @@ async def toplu_puan(interaction: discord.Interaction):
             await interaction.followup.send(embed=embed)
         else:
             await interaction.channel.send(embed=embed)
+
+
+# 4. /puansifirla (Bireysel Sıfırlama)
+@bot.tree.command(
+    name="puansifirla", description="Belirtilen üyenin puanını sıfırlar."
+)
+@app_commands.describe(kullanici="Puanı sıfırlanacak üye")
+async def puan_sifirla(
+    interaction: discord.Interaction, kullanici: discord.Member
+):
+    if not has_required_role(interaction):
+        embed = create_black_embed(
+            "Yetki Reddedildi",
+            "❌ Bu komutu kullanmak için gerekli rollere sahip değilsiniz.",
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+
+    user_id = str(kullanici.id)
+    reset_user_points(user_id)
+
+    embed = create_black_embed("Puan Sıfırlama Başarılı")
+    embed.add_field(
+        name="İşlem Yapılan Kullanıcı", value=kullanici.mention, inline=True
+    )
+    embed.add_field(name="Güncel Puan", value="`0` Puan", inline=True)
+
+    await interaction.response.send_message(embed=embed)
+
+
+# 5. /toplusifirla (Tüm Sistem Sıfırlama)
+@bot.tree.command(
+    name="toplusifirla",
+    description="Sistemdeki TÜM üyelerin puanlarını sıfırlar.",
+)
+async def toplu_sifirla(interaction: discord.Interaction):
+    if not has_required_role(interaction):
+        embed = create_black_embed(
+            "Yetki Reddedildi",
+            "❌ Bu komutu kullanmak için gerekli rollere sahip değilsiniz.",
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+
+    reset_all_points()
+
+    embed = create_black_embed(
+        "Sistem Geneli Sıfırlama Tamamlandı",
+        "⚠️ Veritabanındaki tüm puan kayıtları temizlenmiştir.",
+    )
+    await interaction.response.send_message(embed=embed)
 
 
 # --- BOTU BAŞLAT ---
