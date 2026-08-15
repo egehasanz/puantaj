@@ -89,28 +89,47 @@ def create_black_embed(title: str, description: str = None) -> discord.Embed:
 
 # --- BUTON VE BİLDİRİM SİSTEMİ ---
 class PromotionButton(discord.ui.View):
-    def __init__(self, target_user: discord.Member, current_rank: str):
-        super().__init__(timeout=None)  # Kalıcı buton
-        self.target_user = target_user
-        self.current_rank = current_rank
+    def __init__(self):
+        super().__init__(timeout=None)  # Kalıcı buton (Persistent View)
 
-    @discord.ui.button(label="Terfi Verildi", style=discord.ButtonStyle.success, emoji="✅", custom_id="promotion_confirm_btn")
-    async def promote_callback(self, button: discord.ui.Button, interaction: discord.Interaction):
+    @discord.ui.button(
+        label="Terfi Verildi", 
+        style=discord.ButtonStyle.success, 
+        emoji="✅", 
+        custom_id="promotion_confirm_btn"  # Bot yeniden başladığında da butonun çalışması için sabit ID
+    )
+    async def promote_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not has_required_role(interaction):
             await interaction.response.send_message("❌ Bu işlemi onaylamak için yetkiniz yok.", ephemeral=True)
             return
 
-        user_id = str(self.target_user.id)
+        # Discord "zamanında yanıt vermedi" hatasını engellemek için anında defer atıyoruz
+        await interaction.response.defer(ephemeral=True)
+
+        embed = interaction.message.embeds[0]
         
-        # Sıradaki rütbeyi belirle
-        if self.current_rank in RANK_ORDER:
-            current_index = RANK_ORDER.index(self.current_rank)
+        # Embed içerisindeki Kullanıcı ve Mevcut Rütbe bilgilerini okuma
+        user_field = next((f for f in embed.fields if f.name == "Kullanıcı"), None)
+        rank_field = next((f for f in embed.fields if f.name == "Mevcut Rütbe"), None)
+
+        if not user_field or not rank_field:
+            await interaction.followup.send("⚠️ Mesaj verisi okunamadı.", ephemeral=True)
+            return
+
+        target_user_id = user_field.value.replace("<@", "").replace(">", "").replace("!", "")
+        current_rank = rank_field.value.replace("`", "").strip()
+
+        # Sıradaki rütbeye yükseltme
+        if current_rank in RANK_ORDER:
+            current_index = RANK_ORDER.index(current_rank)
             if current_index + 1 < len(RANK_ORDER):
                 next_rank = RANK_ORDER[current_index + 1]
-                set_user_rank(user_id, next_rank)
-                reset_user_points(user_id) # Puan sıfırlanır
+                
+                # Veritabanında rütbe yükseltilir ve puan sıfırlanır
+                set_user_rank(target_user_id, next_rank)
+                reset_user_points(target_user_id)
 
-                # Butonu devre dışı bırak
+                # Buton pasife çekilir
                 button.disabled = True
                 button.label = f"Terfi Onaylandı ({next_rank})"
                 button.style = discord.ButtonStyle.secondary
@@ -119,16 +138,16 @@ class PromotionButton(discord.ui.View):
                 confirm_embed = create_black_embed(
                     "Terfi İşlemi Onaylandı",
                     f"✅ {interaction.user.mention} tarafından onaylandı.\n\n"
-                    f"👤 **Personel:** {self.target_user.mention}\n"
+                    f"👤 **Personel:** <@{target_user_id}>\n"
                     f"🎖️ **Yeni Rütbe:** `{next_rank}`\n"
                     f"🔄 **Puan Durumu:** Sıfırlandı (`0` Puan)"
                 )
                 await interaction.channel.send(embed=confirm_embed)
-                await interaction.response.send_message("Terfi işlemi başarıyla tamamlandı ve rütbe yükseltildi.", ephemeral=True)
+                await interaction.followup.send("✅ Terfi işlemi başarıyla onaylandı ve rütbe yükseltildi.", ephemeral=True)
             else:
-                await interaction.response.send_message("⚠️ Kullanıcı zaten en yüksek rütbede (Başçavuş).", ephemeral=True)
+                await interaction.followup.send("⚠️ Kullanıcı zaten en yüksek rütbede (Başçavuş).", ephemeral=True)
         else:
-            await interaction.response.send_message("⚠️ Tanımsız rütbe hatası.", ephemeral=True)
+            await interaction.followup.send("⚠️ Tanımsız rütbe hatası.", ephemeral=True)
 
 async def check_and_notify_rank(guild: discord.Guild, user: discord.Member, points: int):
     """Kullanıcının puanı mevcut rütbesinin hedefine ulaştıysa butonlu bildirim atar."""
@@ -148,12 +167,12 @@ async def check_and_notify_rank(guild: discord.Guild, user: discord.Member, poin
             embed.add_field(name="Mevcut Puan", value=f"`{points}`", inline=True)
             
             content = f"{role_mentions}\n📢 {user.mention} kullanıcısı **{user_rank}** rütbesi için gerekli terfi puanını tamamlamıştır!"
-            view = PromotionButton(user, user_rank)
+            view = PromotionButton()
             await channel.send(content=content, embed=embed, view=view)
 
 # --- KOMUTLAR ---
 
-# 1. /rutbeayarla (Yeni eklendi - 1 kere yapılır)
+# 1. /rutbeayarla (Bir kullanıcıya ilk başlarken veya manuel rütbe atamak için)
 @bot.tree.command(name="rutbeayarla", description="Kullanıcının bot içerisindeki rütbesini ayarlar.")
 @app_commands.describe(kullanici="Rütbesi ayarlanacak üye", rutbe="Atanacak rütbe")
 @app_commands.choices(rutbe=[
@@ -317,6 +336,8 @@ async def toplu_sifirla(interaction: discord.Interaction):
 # --- BOTU BAŞLAT ---
 @bot.event
 async def on_ready():
+    # Bot yeniden başladığında butonların kalıcı dinlenmesi sağlanıyor
+    bot.add_view(PromotionButton())
     print(f"✅ {bot.user.name} olarak giriş yapıldı ve Redis bağlantısı aktif!")
 
 if __name__ == "__main__":
